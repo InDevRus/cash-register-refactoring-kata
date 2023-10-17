@@ -1,6 +1,13 @@
 plugins {
     id 'java'
     id "io.freefair.lombok" version "6.3.0"
+    id "java-library"
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
 }
 
 group 'com.github.ismail2ov'
