@@ -15,5 +15,3 @@ modules.xml
 *.rar
 
 target/
-
-/.mvn/**
