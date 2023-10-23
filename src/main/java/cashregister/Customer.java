@@ -1,90 +1,88 @@
 package cashregister;
 
+import cashregister.cost.format.CostFormats;
+import cashregister.credit.CreditsCounter;
+import cashregister.credit.CreditsCounterByProductType;
+import cashregister.discount.Discounter;
+import cashregister.discount.DiscounterByProductType;
+import lombok.AccessLevel;
 import lombok.Getter;
+import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
+import org.javamoney.moneta.Money;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.text.MessageFormat;
+import java.util.StringJoiner;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 
 
 @RequiredArgsConstructor
 public class Customer {
-
-    @Getter
+    @Getter(AccessLevel.PUBLIC)
     private final String name;
 
-    private List<OrderLine> orderLines = new ArrayList<>();
+    private final ConcurrentMap<Product, OrderEntry> orderEntries = new ConcurrentHashMap<>();
 
-    public void addProduct(Product arg1, int arg2) {
-        for (OrderLine orderLine : orderLines) {
-            if (orderLine.getProduct().equals(arg1)) {
-                orderLine.increaseQuantity(arg2);
-                return;
-            }
+    // TODO: Injection
+    private final Discounter discounter = new DiscounterByProductType();
+
+    // TODO: Injection
+    private final CreditsCounter creditsCounter = new CreditsCounterByProductType();
+
+    public void addProduct(Product product, int requiredAmount) {
+        if (requiredAmount <= 0) {
+            throw new IllegalArgumentException("Amount is expected to be positive.");
         }
 
-        orderLines.add(new OrderLine(arg1, arg2));
+        orderEntries.put(product, new OrderEntry(product, requiredAmount));
     }
 
-    public String statement() {
-        double totalAmount = 0;
-        int accumulatedCredits = 0;
-        int numItems = 0;
-        String result = "Statement for " + getName() + "\n";
+    public void dropProduct(Product product) {
+        orderEntries.remove(product);
+    }
 
-        for (OrderLine each : orderLines) {
-            double thisAmount = 0;
-            double thisDiscount = 0;
+    private static final String DEFAULT_STATEMENT_DELIMITER = "---" + System.lineSeparator();
+    private static final int DEFAULT_STATEMENT_CONTENT_INDENTATION_SIZE = 4;
+    private static final String DEFAULT_STATEMENT_CONTENT_INDENTATION = " ".repeat(DEFAULT_STATEMENT_CONTENT_INDENTATION_SIZE);
 
-            // determine amounts for each order line
-            switch (each.getProduct().getType()) {
-                case Product.REGULAR:
-                    thisAmount = each.getQuantity() * each.getProduct().getPrice();
-                    break;
-                case Product.PROMOTED:
-                    thisAmount = each.getQuantity() * each.getProduct().getPrice();
-                    break;
-                case Product.SECOND_70_PERCENT_LESS:
-                    if (each.getQuantity() >= 2) {
-                        int itemsToDiscount = each.getQuantity() / 2;
-                        thisDiscount = itemsToDiscount * each.getProduct().getPrice() * 0.7;
-                        thisAmount = each.getQuantity() * each.getProduct().getPrice() - thisDiscount;
-                    } else {
-                        thisAmount = each.getQuantity() * each.getProduct().getPrice();
-                    }
-                    break;
-                case Product.PROMO_3x2:
-                    if (each.getQuantity() >= 3) {
-                        int itemsToDiscount = each.getQuantity() / 3;
-                        thisDiscount = itemsToDiscount * each.getProduct().getPrice();
-                        thisAmount = each.getQuantity() * each.getProduct().getPrice() - thisDiscount;
-                    } else {
-                        thisAmount = each.getQuantity() * each.getProduct().getPrice();
-                    }
-                    break;
-            }
+    public String formStatement() {
+        return formStatement(DEFAULT_STATEMENT_DELIMITER);
+    }
 
-            // add credits for purchasing more than 10 units of regular products
-            if ((each.getProduct().getType() == Product.REGULAR) && each.getQuantity() > 10)
-                accumulatedCredits++;
-            // add extra credit for every promoted product purchased
-            if (each.getProduct().getType() == Product.PROMOTED)
-                accumulatedCredits += each.getQuantity();
+    public String formStatement(@NonNull String delimiter) {
+        var totalCost = Money.zero(Product.DEFAULT_UNIT);
+        var accumulatedCredits = 0;
+        var itemsCount = 0;
+
+        var prefix = MessageFormat.format("Statement for {0}{1}", getName(), System.lineSeparator());
+        var result = new StringJoiner(delimiter, prefix, "");
+
+        for (OrderEntry currentEntry : orderEntries.values()) {
+            var currentCost = discounter.findDiscount(currentEntry);
+
+            accumulatedCredits += creditsCounter.countCredits(currentEntry);
+
+            var statementLine = MessageFormat.format("{0}{1}: {2} x {3} = {4} {5}",
+                    DEFAULT_STATEMENT_CONTENT_INDENTATION,
+                    getName(),
+                    currentEntry.quantity(),
+                    CostFormats.DEFAULT_WITHOUT_SYMBOL.format(currentEntry.product().price()),
+                    CostFormats.DEFAULT_FORMAT.format(currentCost),
+                    System.lineSeparator());
+            result.add(statementLine);
 
             // show figures for each order line
-            result += String.format("\t %s: %d x %.2f = %.2f €\n", each.getProduct().getName(), each.getQuantity(), each.getProduct().getPrice(), thisAmount);
-            numItems += each.getQuantity();
-            totalAmount += thisAmount;
+            itemsCount += currentEntry.quantity();
+            totalCost = totalCost.add(currentCost);
         }
 
-        // add footer lines
-        result += "---\n";
-        result += String.format("Number of items: %d\n", numItems);
-        result += "---\n";
-        result += String.format("Credits accumulated in this purchase: %d\n", accumulatedCredits);
-        result += "---\n";
-        result += String.format("Total amount: %.2f €\n", totalAmount);
+        result.add(MessageFormat.format("Number of items: {0}{1}", itemsCount, System.lineSeparator()));
+        result.add(MessageFormat.format("Credits accumulated in this purchase: {0}{1}", accumulatedCredits, System.lineSeparator()));
+        result.add(MessageFormat.format("Total amount: {0} {1}",
+                CostFormats.DEFAULT_FORMAT.format(totalCost),
+                System.lineSeparator()));
 
-        return result;
+        return result.toString();
     }
 }
